@@ -40,7 +40,7 @@ def get_dataset(config):
     if (lang_src == 'en' and lang_tgt == 'zh') or (lang_src == 'zh' and lang_tgt == 'en'):   
         ds_raw = load_dataset("wmt19", "zh-en", split="train[1000:3000]")  # Use only 5% of the training data
     else:
-        ds_raw = load_dataset('opus_books', f'{lang_src}-{lang_tgt}', split='train[:20%]') # Use only 20% of the training data
+        ds_raw = load_dataset('opus_books', f'{lang_src}-{lang_tgt}', split='train')
     
     # Build tokenizers
     tokenizer_src = get_or_build_tokenizer(config, ds_raw, lang_src)
@@ -95,7 +95,7 @@ def greedy_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_
 
     return decoder_input.squeeze(0)
 
-def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, device, print_msg, global_state, writer, num_examples=5):
+def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, device, print_msg, num_examples=2):
     model.eval()
     count = 0
     console_width = 80
@@ -122,6 +122,10 @@ def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, 
                 break
     return
 
+def get_model(config, vocab_src_len, vocab_tgt_len):
+    model = build_transformer(vocab_src_len, vocab_tgt_len, config['seq_len'], config['seq_len'], config['d_model'])
+    return model
+
 # The training loop
 def train_model(config):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -133,12 +137,9 @@ def train_model(config):
     writer = SummaryWriter(config['experiment_name'])
 
     # dataset for translation
-    seq_len, d_model = config['seq_len'], config['d_model']
     train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt = get_dataset(config)
-    src_vocab_size, tgt_vocab_size = tokenizer_src.get_vocab_size(), tokenizer_tgt.get_vocab_size()
-
     # transformer model
-    model = build_transformer(src_vocab_size, tgt_vocab_size, seq_len, seq_len, d_model).to(device)
+    model = get_model(config, tokenizer_src.get_vocab_size(), tokenizer_tgt.get_vocab_size()).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr = config['lr'], eps=1e-9)
     loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer_src.token_to_id('[PAD]'), label_smoothing=0.1).to(device)
@@ -183,7 +184,7 @@ def train_model(config):
             optimizer.zero_grad()
             global_step += 1
         
-        run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, seq_len, device, lambda msg: batch_iterator.write(msg), global_step, writer)
+        run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device, lambda msg: batch_iterator.write(msg))
         
         model_filename = get_weights_file_path(config, f'{epoch:02d}')
         torch.save({
